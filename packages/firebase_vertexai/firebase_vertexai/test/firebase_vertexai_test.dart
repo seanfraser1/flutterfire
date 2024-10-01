@@ -52,7 +52,6 @@ void main() {
       final vertexAI = FirebaseVertexAI.instanceFor(app: app);
       expect(vertexAI.app, equals(app));
       expect(vertexAI.location, equals('us-central1'));
-      expect(vertexAI.options.timeout.inMilliseconds, equals(defaultTimeout));
     });
 
     test('Instance creation with custom', () {

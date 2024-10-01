@@ -91,52 +91,77 @@ class _ChatWidgetState extends State<ChatWidget> {
 
     initFirebase().then((value) {
       _model = FirebaseVertexAI.instance.generativeModel(
-        model: 'gemini-1.5-flash-preview-0514',
+        model: 'gemini-1.5-flash',
       );
       _functionCallModel = FirebaseVertexAI.instance.generativeModel(
-        model: 'gemini-1.5-flash-preview-0514',
+        model: 'gemini-1.5-flash',
         tools: [
-          Tool(functionDeclarations: [exchangeRateTool]),
+          Tool.functionDeclarations([getWeatherTool]),
         ],
       );
       _chat = _model.startChat();
     });
   }
 
-  Future<Map<String, Object?>> findExchangeRate(
+  // This is a hypothetical API to return a fake weather data collection for certain location
+  Future<Map<String, Object?>> getWeather(
     Map<String, Object?> arguments,
-  ) async =>
-      // This hypothetical API returns a JSON such as:
-      // {"base":"USD","date":"2024-04-17","rates":{"SEK": 0.091}}
-      {
-        'date': arguments['currencyDate'],
-        'base': arguments['currencyFrom'],
-        'rates': <String, Object?>{arguments['currencyTo']! as String: 0.091},
-      };
+  ) async {
+    // Possible external api call
+    // apiResponse = await requests.post(weather_api_url, data={'location': arguments['location']})
 
-  final exchangeRateTool = FunctionDeclaration(
-    'findExchangeRate',
-    'Returns the exchange rate between currencies on given date.',
-    Schema(
-      SchemaType.object,
-      properties: {
-        'currencyDate': Schema(
-          SchemaType.string,
-          description: 'A date in YYYY-MM-DD format or '
-              'the exact value "latest" if a time period is not specified.',
+    // Mock up apiResponse
+    final apiResponse = {
+      'location': arguments['location'],
+      'temperature': 38,
+      'chancePrecipitation': '56%',
+      'cloudConditions': 'partly-cloudy',
+    };
+    return apiResponse;
+  }
+
+  /// Actual function to demonstrate the function calling feature.
+  final getWeatherTool = FunctionDeclaration(
+    'fetchCurrentWeather',
+    'Get the weather conditions for a specific city on a specific date.',
+    parameters: {
+      'location': Schema.string(
+        description:
+            'The city name of the location for which to get the weather.',
+      ),
+    },
+  );
+
+  /// Sample function to show the usage of Schema, and demo the usage of ToolConfig.
+  final extractSaleRecordsTool = FunctionDeclaration(
+    'extractSaleRecords',
+    'Extract sale records from a document.',
+    parameters: {
+      'records': Schema.array(
+        description: 'A list of sale records',
+        items: Schema.object(
+          description: 'Data for a sale record',
+          properties: {
+            'id': Schema.integer(description: 'The unique id of the sale.'),
+            'date': Schema.string(
+              description:
+                  'Date of the sale, in the format of MMDDYY, e.g., 031023',
+            ),
+            'totalAmount':
+                Schema.number(description: 'The total amount of the sale.'),
+            'customerName': Schema.string(
+              description:
+                  'The name of the customer, including first name and last name.',
+            ),
+            'customerContact': Schema.string(
+              description:
+                  'The phone number of the customer, e.g., 650-123-4567.',
+            ),
+          },
+          optionalProperties: ['customerName', 'customerContact'],
         ),
-        'currencyFrom': Schema(
-          SchemaType.string,
-          description: 'The currency code of the currency to convert from, '
-              'such as "USD".',
-        ),
-        'currencyTo': Schema(
-          SchemaType.string,
-          description: 'The currency code of the currency to convert to, '
-              'such as "USD".',
-        ),
-      },
-    ),
+      ),
+    },
   );
 
   Future<void> initFirebase() async {
@@ -274,6 +299,20 @@ class _ChatWidgetState extends State<ChatWidget> {
                         : Theme.of(context).colorScheme.primary,
                   ),
                 ),
+                IconButton(
+                  tooltip: 'schema prompt',
+                  onPressed: !_loading
+                      ? () async {
+                          await _promptSchemaTest(_textController.text);
+                        }
+                      : null,
+                  icon: Icon(
+                    Icons.schema,
+                    color: _loading
+                        ? Theme.of(context).colorScheme.secondary
+                        : Theme.of(context).colorScheme.primary,
+                  ),
+                ),
                 if (!_loading)
                   IconButton(
                     onPressed: () async {
@@ -302,6 +341,51 @@ class _ChatWidgetState extends State<ChatWidget> {
         ],
       ),
     );
+  }
+
+  Future<void> _promptSchemaTest(String subject) async {
+    setState(() {
+      _loading = true;
+    });
+    try {
+      final content = [Content.text('Create a list of 20 $subject.')];
+
+      final response = await _model.generateContent(
+        content,
+        generationConfig: GenerationConfig(
+          responseMimeType: 'application/json',
+          responseSchema: Schema.array(
+            items: Schema.string(
+              description: 'A single word that a player will need to guess.',
+            ),
+          ),
+        ),
+      );
+
+      var text = response.text;
+      _generatedContent.add((image: null, text: text, fromUser: false));
+
+      if (text == null) {
+        _showError('No response from API.');
+        return;
+      } else {
+        setState(() {
+          _loading = false;
+          _scrollDown();
+        });
+      }
+    } catch (e) {
+      _showError(e.toString());
+      setState(() {
+        _loading = false;
+      });
+    } finally {
+      _textController.clear();
+      setState(() {
+        _loading = false;
+      });
+      _textFieldFocus.requestFocus();
+    }
   }
 
   Future<void> _sendStorageUriPrompt(String message) async {
@@ -358,8 +442,8 @@ class _ChatWidgetState extends State<ChatWidget> {
         Content.multi([
           TextPart(message),
           // The only accepted mime types are image/*.
-          DataPart('image/jpeg', catBytes.buffer.asUint8List()),
-          DataPart('image/jpeg', sconeBytes.buffer.asUint8List()),
+          InlineDataPart('image/jpeg', catBytes.buffer.asUint8List()),
+          InlineDataPart('image/jpeg', sconeBytes.buffer.asUint8List()),
         ]),
       ];
       _generatedContent.add(
@@ -444,29 +528,33 @@ class _ChatWidgetState extends State<ChatWidget> {
     setState(() {
       _loading = true;
     });
-    final chat = _functionCallModel.startChat();
-    const prompt = 'How much is 50 US dollars worth in Swedish krona?';
+    final functionCallChat = _functionCallModel.startChat();
+    const prompt = 'What is the weather like in Boston?';
 
     // Send the message to the generative model.
-    var response = await chat.sendMessage(Content.text(prompt));
+    var response = await functionCallChat.sendMessage(
+      Content.text(prompt),
+    );
 
     final functionCalls = response.functionCalls.toList();
     // When the model response with a function call, invoke the function.
     if (functionCalls.isNotEmpty) {
       final functionCall = functionCalls.first;
-      final result = switch (functionCall.name) {
-        // Forward arguments to the hypothetical API.
-        'findExchangeRate' => await findExchangeRate(functionCall.args),
+      final functionResult = switch (functionCall.name) {
+        // Forward the structured input data prepared by the model
+        // to the hypothetical external API.
+        'fetchCurrentWeather' => await getWeather(functionCall.args),
         // Throw an exception if the model attempted to call a function that was
         // not declared.
         _ => throw UnimplementedError(
-            'Function not implemented: ${functionCall.name}',
+            'Function not declared to the model: ${functionCall.name}',
           )
       };
       // Send the response to the model so that it can use the result to generate
       // text for the user.
-      response = await chat
-          .sendMessage(Content.functionResponse(functionCall.name, result));
+      response = await functionCallChat.sendMessage(
+        Content.functionResponse(functionCall.name, functionResult),
+      );
     }
     // When the model responds with non-null text content, print it.
     if (response.text case final text?) {
@@ -483,11 +571,19 @@ class _ChatWidgetState extends State<ChatWidget> {
     });
 
     const prompt = 'tell a short story';
-    var response = await _model.countTokens([Content.text(prompt)]);
-    print(
-      'token: ${response.totalTokens}, billable characters: ${response.totalBillableCharacters}',
-    );
+    var content = Content.text(prompt);
+    var tokenResponse = await _model.countTokens([content]);
+    final tokenResult =
+        'Count token: ${tokenResponse.totalTokens}, billable characters: ${tokenResponse.totalBillableCharacters}';
+    _generatedContent.add((image: null, text: tokenResult, fromUser: false));
 
+    var contentResponse = await _model.generateContent([content]);
+    final contentMetaData =
+        'result metadata, promptTokenCount:${contentResponse.usageMetadata!.promptTokenCount}, '
+        'candidatesTokenCount:${contentResponse.usageMetadata!.candidatesTokenCount}, '
+        'totalTokenCount:${contentResponse.usageMetadata!.totalTokenCount}';
+    _generatedContent
+        .add((image: null, text: contentMetaData, fromUser: false));
     setState(() {
       _loading = false;
     });
